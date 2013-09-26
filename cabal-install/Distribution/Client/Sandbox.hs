@@ -56,7 +56,7 @@ import Distribution.Client.Install            ( InstallArgs,
 import Distribution.Client.Sandbox.PackageEnvironment
   ( PackageEnvironment(..), IncludeComments(..), PackageEnvironmentType(..)
   , createPackageEnvironmentFile, classifyPackageEnvironment
-  , tryLoadSandboxPackageEnvironmentFile, loadUserConfig
+  , tryLoadSandboxPackageEnvironmentFile, loadUserAndFreezeConfig
   , commentPackageEnvironment, showPackageEnvironmentWithComments
   , sandboxPackageEnvironmentFile, userPackageEnvironmentFile )
 import Distribution.Client.Sandbox.Types      ( SandboxPackageInfo(..)
@@ -485,20 +485,23 @@ loadConfigOrSandboxConfig verbosity globalFlags userInstallFlag = do
   pkgEnvType <- classifyPackageEnvironment pkgEnvDir sandboxConfigFileFlag
 
   case pkgEnvType of
-    -- A @cabal.sandbox.config@ file (and possibly @cabal.config@) is present.
+    -- A @cabal.sandbox.config@ file (and possibly none, one or both of
+    -- @cabal.config@ and @cabal.freeze@) is present.
     SandboxPackageEnvironment -> do
       (sandboxDir, pkgEnv) <- tryLoadSandboxConfig verbosity globalFlags
                               -- ^ Prints an error message and exits on error.
       let config = pkgEnvSavedConfig pkgEnv
       return (UseSandbox sandboxDir, config)
 
-    -- Only @cabal.config@ is present.
+    -- One or both of @cabal.config@ and @cabal.freeze@ is present,
+    -- @cabal.sandbox.config@ is not.
     UserPackageEnvironment    -> do
       config <- loadConfig verbosity configFileFlag userInstallFlag
-      userConfig <- loadUserConfig verbosity pkgEnvDir
+      userConfig <- loadUserAndFreezeConfig verbosity pkgEnvDir
       return (NoSandbox, config `mappend` userConfig)
 
-    -- Neither @cabal.sandbox.config@ nor @cabal.config@ are present.
+    -- None of @cabal.sandbox.config@, @cabal.config@ nor @cabal.freeze@
+    -- are present.
     AmbientPackageEnvironment -> do
       config <- loadConfig verbosity configFileFlag userInstallFlag
       return (NoSandbox, config)

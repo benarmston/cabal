@@ -26,7 +26,7 @@ import qualified Distribution.Client.InstallPlan as InstallPlan
 import Distribution.Client.Setup
          ( GlobalFlags(..), FreezeFlags(..) )
 import Distribution.Client.Sandbox.PackageEnvironment
-         ( userPackageEnvironmentFile )
+         ( freezeEnvironmentFile )
 import Distribution.Client.Sandbox.Types
          ( SandboxPackageInfo(..) )
 
@@ -153,7 +153,7 @@ planPackages verbosity comp platform mSandboxPkgInfo freezeFlags
 
 freezePackages :: [PlanPackage] -> IO ()
 freezePackages pkgs =
-    writeFileAtomic userPackageEnvironmentFile $ constraints pkgs
+    writeFileAtomic freezeEnvironmentFile $ constraints pkgs
   where
     constraints = BS.Char8.pack
                 . (++ "\n")

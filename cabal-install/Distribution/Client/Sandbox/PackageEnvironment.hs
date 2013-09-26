@@ -19,13 +19,14 @@ module Distribution.Client.Sandbox.PackageEnvironment (
   , showPackageEnvironment
   , showPackageEnvironmentWithComments
   , setPackageDB
-  , loadUserConfig
+  , loadUserAndFreezeConfig
 
   , basePackageEnvironment
   , initialPackageEnvironment
   , commentPackageEnvironment
   , sandboxPackageEnvironmentFile
   , userPackageEnvironmentFile
+  , freezeEnvironmentFile
   ) where
 
 import Distribution.Client.Config      ( SavedConfig(..), commentSavedConfig,
@@ -102,14 +103,19 @@ sandboxPackageEnvironmentFile = "cabal.sandbox.config"
 userPackageEnvironmentFile :: FilePath
 userPackageEnvironmentFile = "cabal.config"
 
+-- | Optional package environment file that can be used to freeze the
+-- dependency versions. Created by the freeze command.
+freezeEnvironmentFile :: FilePath
+freezeEnvironmentFile = "cabal.freeze"
+
 -- | Type of the current package environment.
 data PackageEnvironmentType =
   SandboxPackageEnvironment   -- ^ './cabal.sandbox.config'
   | UserPackageEnvironment    -- ^ './cabal.config'
   | AmbientPackageEnvironment -- ^ '~/.cabal/config'
 
--- | Is there a 'cabal.sandbox.config' or 'cabal.config' in this
--- directory?
+-- | Is there a 'cabal.sandbox.config' or either of 'cabal.config' or
+-- 'cabal.freeze' in this directory?
 classifyPackageEnvironment :: FilePath -> (Flag FilePath)
                               -> IO PackageEnvironmentType
 classifyPackageEnvironment pkgEnvDir sandboxConfigFileFlag =
@@ -120,7 +126,8 @@ classifyPackageEnvironment pkgEnvDir sandboxConfigFileFlag =
     doClassify = do
       isSandbox <- configExists sandboxPackageEnvironmentFile
       isUser    <- configExists userPackageEnvironmentFile
-      case (isSandbox, isUser) of
+      isFroozen <- configExists freezeEnvironmentFile
+      case (isSandbox, isUser || isFroozen) of
         (True,  _)     -> return SandboxPackageEnvironment
         (False, True)  -> return UserPackageEnvironment
         (False, False) -> return AmbientPackageEnvironment
@@ -261,6 +268,12 @@ inheritedPackageEnvironment verbosity pkgEnv = do
 userPackageEnvironment :: Verbosity -> FilePath -> IO PackageEnvironment
 userPackageEnvironment verbosity pkgEnvDir = do
   let path = pkgEnvDir </> userPackageEnvironmentFile
+  loadEnvironment verbosity path
+
+
+-- | Load the package environment file at the given path, if it exists.
+loadEnvironment :: Verbosity -> FilePath -> IO PackageEnvironment
+loadEnvironment verbosity path = do
   minp <- readPackageEnvironmentFile mempty path
   case minp of
     Nothing -> return mempty
@@ -274,10 +287,41 @@ userPackageEnvironment verbosity pkgEnvDir = do
         ++ maybe "" (\n -> ":" ++ show n) line ++ ":\n" ++ msg
       return mempty
 
--- | Same as @userPackageEnvironmentFile@, but returns a SavedConfig.
+
+-- | Load the freeze package environment if it exists (the optional "cabal.freeze"
+-- file). Any sections in the file other than @constraints@ are silently
+-- ignored.
+freezeEnvironment :: Verbosity -> FilePath -> IO PackageEnvironment
+freezeEnvironment verbosity pkgEnvDir = do
+  let freeze_path = pkgEnvDir </> freezeEnvironmentFile
+  freeze <- loadEnvironment verbosity freeze_path
+  return mempty {
+    pkgEnvSavedConfig = mempty {
+        savedConfigureExFlags =
+          savedConfigureExFlags . pkgEnvSavedConfig $ freeze
+      }
+    }
+
+
+-- | Same as @userPackageEnvironment@, but returns a SavedConfig.
 loadUserConfig :: Verbosity -> FilePath -> IO SavedConfig
 loadUserConfig verbosity pkgEnvDir = fmap pkgEnvSavedConfig
                                      $ userPackageEnvironment verbosity pkgEnvDir
+
+-- | Same as @freezeEnvironment@, but returns a SavedConfig.
+loadFreezeConfig :: Verbosity -> FilePath -> IO SavedConfig
+loadFreezeConfig verbosity pkgEnvDir = fmap pkgEnvSavedConfig
+                                     $ freezeEnvironment verbosity pkgEnvDir
+
+
+-- | Load the @mappend@ed combination of the user and freeze package
+-- environments if they exist. 
+loadUserAndFreezeConfig :: Verbosity -> FilePath -> IO SavedConfig
+loadUserAndFreezeConfig verbosity pkgEnvDir = do
+  user   <- loadUserConfig verbosity pkgEnvDir
+  freeze <- loadFreezeConfig verbosity pkgEnvDir
+  return $ user `mappend` freeze
+
 
 -- | Common error handling code used by 'tryLoadSandboxPackageEnvironment' and
 -- 'updatePackageEnvironment'.
@@ -324,6 +368,7 @@ tryLoadSandboxPackageEnvironmentFile verbosity pkgEnvFile configFileFlag = do
   let common = commonPackageEnvironment sandboxDir
   user      <- userPackageEnvironment verbosity pkgEnvDir
   inherited <- inheritedPackageEnvironment verbosity user
+  freeze    <- freezeEnvironment verbosity pkgEnvDir
 
   -- Layer the package environment settings over settings from ~/.cabal/config.
   cabalConfig <- fmap unsetSymlinkBinDir $
@@ -331,7 +376,7 @@ tryLoadSandboxPackageEnvironmentFile verbosity pkgEnvFile configFileFlag = do
   return (sandboxDir,
           updateInstallDirs $
           (base `mappend` (toPkgEnv cabalConfig) `mappend`
-           common `mappend` inherited `mappend` user)
+           common `mappend` inherited `mappend` user `mappend` freeze)
           `overrideSandboxSettings` pkgEnv)
     where
       toPkgEnv config = mempty { pkgEnvSavedConfig = config }
